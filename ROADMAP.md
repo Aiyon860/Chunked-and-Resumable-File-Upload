@@ -322,10 +322,10 @@ Cek:
 ## Fase 8 — Bonus: Validasi & Optimasi (Opsional)
 > Eksplorasi · Tidak ada estimasi
 
-- [ ] Validasi tipe file di frontend sebelum upload dimulai
-- [ ] Validasi ukuran maksimum file (misal: tolak > 500 MB)
-- [ ] Tambahkan estimasi waktu tersisa berdasarkan kecepatan rata-rata upload
-- [ ] Tambahkan endpoint `DELETE /upload/:uploadId` untuk cancel & cleanup upload
+- [x] Validasi tipe file di frontend sebelum upload dimulai
+- [x] Validasi ukuran maksimum file (misal: tolak > 500 MB)
+- [x] Tambahkan estimasi waktu tersisa berdasarkan kecepatan rata-rata upload
+- [x] Tambahkan endpoint `DELETE /upload/:uploadId` untuk cancel & cleanup upload
 
 **Prompt koreksi AI:**
 ```
@@ -335,6 +335,15 @@ Saya menambahkan fitur bonus berikut ke aplikasi chunked upload saya:
 
 Tolong koreksi implementasinya dan berikan saran optimasi jika ada.
 ```
+
+**Hasil Pengerjaan Fase 8 (Bonus):**
+✅ Validasi allowedMimeTypes (PNG, JPEG, PDF, DOCX, DOC, XLSX, XLS, PPTX, PPT)
+✅ Validasi MAX_FILE_SIZE (100 MB) dan ekstensi file
+✅ Speed upload calculation: speed = uploadedBytes / elapsedTime
+✅ Remaining time estimation: ((totalChunks - chunkIndex) * CHUNK_SIZE) / speed
+✅ AbortController untuk cancel fetch request
+✅ Cancel button yang memanggil DELETE endpoint + controller.abort()
+✅ DELETE /upload/:uploadId endpoint untuk hapus folder temp
 
 ---
 

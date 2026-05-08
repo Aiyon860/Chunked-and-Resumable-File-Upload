@@ -1,3 +1,6 @@
+const controller = new AbortController();
+const { signal } = controller;
+
 const uploadForm = document.getElementById("uploadForm");
 const uploadBtn = document.getElementById("uploadBtn");
 const progressBar = document.getElementById("progressBar");
@@ -75,6 +78,9 @@ uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   uploadBtn.disabled = true;
+  const cancelButton = document.createElement("button");
+  cancelButton.id = "cancelUploadBtn";
+  cancelButton.textContent = "Cancel Upload";
 
   const CHUNK_SIZE = 1 * 1024 * 1024; // 1 MB
   const file = fileInput.files[0];
@@ -100,13 +106,26 @@ uploadForm.addEventListener("submit", async (e) => {
     statusText.textContent = "Uploading...";
   }
 
+  cancelButton.addEventListener("click", async () => {
+    const response = await fetch(`http://localhost:3000/upload/${uploadId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      return;
+    }
+
+    controller.abort();
+
+    cancelButton.remove();
+    uploadBtn.disabled = false;
+  });
+  uploadForm.after(cancelButton);
+
   for (
     let chunkIndex = lastChunkIndex ?? 0;
     chunkIndex < totalChunks;
     chunkIndex++
   ) {
-    uploadedBytes += CHUNK_SIZE;
-
     const currentTime = Date.now();
     const elapsedTime = (currentTime - startTime) / 1000;
 
@@ -133,17 +152,16 @@ uploadForm.addEventListener("submit", async (e) => {
     for (let retry = 0; retry < maxRetries; retry++) {
       try {
         const response = await fetch("http://localhost:3000/upload/chunk", {
+          signal: signal,
           method: "POST",
           body: chunkBody,
         });
-        if (!response.ok) {
-          statusText.textContent = "Upload failed";
-          uploadBtn.disabled = false;
-          return;
-        }
+        if (!response.ok) continue;
+
         const data = await response.json();
         const uploadedFileName = data.fileName;
 
+        uploadedBytes += CHUNK_SIZE;
         chunkProgress.textContent = `Sending chunk ${chunkIndex + 1} of ${totalChunks}`;
         progressBar.value = ((chunkIndex + 1) / totalChunks) * 100;
 
@@ -157,14 +175,23 @@ uploadForm.addEventListener("submit", async (e) => {
         }
         break;
       } catch (error) {
-        if (retry === maxRetries - 1) {
-          statusText.textContent = "Upload failed";
-          uploadBtn.disabled = false;
-          return;
+        if (error.name === "AbortError") {
+          statusText.textContent = "Cancel operation success!";
+        } else {
+          if (retry === maxRetries - 1) {
+            statusText.textContent = "Upload failed";
+          } else {
+            statusText.textContent = "Cancel operation failed";
+          }
         }
+        localStorage.removeItem(`uploadId_${fileName}`);
+        uploadBtn.disabled = false;
+        cancelButton.remove();
+        return;
       }
     }
   }
 
+  cancelButton.remove();
   uploadBtn.disabled = false;
 });
