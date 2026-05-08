@@ -1,5 +1,5 @@
-const controller = new AbortController();
-const { signal } = controller;
+let controller;
+let signal;
 
 const uploadForm = document.getElementById("uploadForm");
 const uploadBtn = document.getElementById("uploadBtn");
@@ -12,6 +12,11 @@ const fileTypeLabel = document.getElementById("fileType");
 const chunkProgress = document.getElementById("chunkProgress");
 const speedUpload = document.getElementById("speedUpload");
 const remainingTimeLabel = document.getElementById("remainingTime");
+const phaseTransfer = document.getElementById("phaseTransfer");
+const phaseComplete = document.getElementById("phaseComplete");
+const resultArea = document.getElementById("resultArea");
+const errorArea = document.getElementById("errorArea");
+const completeNote = document.getElementById("completeNote");
 
 let lastChunkIndex = null;
 
@@ -19,6 +24,18 @@ const getFileMetadata = async (e) => {
   const file = e.target.files[0];
   statusText.textContent = "";
   chunkProgress.innerHTML = "";
+
+  // Reset phases on new file selection
+  phaseTransfer.classList.add("phase-hidden");
+  phaseComplete.classList.add("phase-hidden");
+  resultArea.style.display = "none";
+  resultArea.textContent = "";
+  errorArea.style.display = "none";
+  errorArea.textContent = "";
+  completeNote.style.display = "";
+  progressBar.value = 0;
+  speedUpload.textContent = "";
+  remainingTimeLabel.textContent = "";
 
   if (!file) {
     statusText.textContent = "No file selected";
@@ -58,19 +75,29 @@ const getFileMetadata = async (e) => {
   fileNameLabel.textContent = file.name;
   fileSizeLabel.textContent = (file.size / (1024 * 1024)).toFixed(2) + " MB";
   fileTypeLabel.textContent = file.type;
+  uploadBtn.disabled = false;
 
   const savedUploadId = localStorage.getItem(`uploadId_${file.name}`);
   if (savedUploadId) {
-    let response = await fetch(
-      `http://localhost:3000/upload/status/${savedUploadId}`,
-    );
-    const data = await response.json();
-    const currentChunks = data.received.length;
-    lastChunkIndex = currentChunks - 1;
-    statusText.textContent = `Please insert the file again to resume the upload...`;
+    try {
+      let response = await fetch(
+        `http://localhost:3000/upload/status/${savedUploadId}`,
+      );
+      const data = await response.json();
+      const currentChunks = data.received.length;
+      lastChunkIndex = currentChunks - 1;
+      statusText.textContent = `Previous upload detected (${currentChunks} chunks received). Click Upload to resume.`;
+    } catch {
+      // Server might be down or temp folder cleaned up
+      localStorage.removeItem(`uploadId_${file.name}`);
+      lastChunkIndex = null;
+    }
   }
 };
 
+fileInput.addEventListener("click", () => {
+  fileInput.value = "";
+});
 fileInput.addEventListener("change", getFileMetadata);
 fileInput.addEventListener("drop", getFileMetadata);
 
@@ -78,6 +105,13 @@ uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   uploadBtn.disabled = true;
+  fileInput.disabled = true;
+  resultArea.style.display = "none";
+
+  // Fresh AbortController for each upload
+  controller = new AbortController();
+  signal = controller.signal;
+
   const cancelButton = document.createElement("button");
   cancelButton.id = "cancelUploadBtn";
   cancelButton.textContent = "Cancel Upload";
@@ -106,6 +140,9 @@ uploadForm.addEventListener("submit", async (e) => {
     statusText.textContent = "Uploading...";
   }
 
+  // Show transfer phase
+  phaseTransfer.classList.remove("phase-hidden");
+
   cancelButton.addEventListener("click", async () => {
     const response = await fetch(`http://localhost:3000/upload/${uploadId}`, {
       method: "DELETE",
@@ -117,7 +154,7 @@ uploadForm.addEventListener("submit", async (e) => {
     controller.abort();
 
     cancelButton.remove();
-    uploadBtn.disabled = false;
+    fileInput.disabled = false;
   });
   uploadForm.after(cancelButton);
 
@@ -167,31 +204,50 @@ uploadForm.addEventListener("submit", async (e) => {
 
         statusText.textContent =
           data.status === "completed"
-            ? `Upload complete! - File uploaded successfully: ${uploadedFileName}`
+            ? ""
             : "Uploading...";
 
         if (data.status === "completed") {
           localStorage.removeItem(`uploadId_${fileName}`);
+          // Show phase 03 with success
+          phaseComplete.classList.remove("phase-hidden");
+          completeNote.style.display = "none";
+          resultArea.style.display = "";
+          resultArea.textContent = `File uploaded successfully: ${uploadedFileName}`;
         }
         break;
       } catch (error) {
         if (error.name === "AbortError") {
-          statusText.textContent = "Cancel operation success!";
-        } else {
-          if (retry === maxRetries - 1) {
-            statusText.textContent = "Upload failed";
-          } else {
-            statusText.textContent = "Cancel operation failed";
-          }
+          statusText.textContent = "";
+          // Show phase 03 with cancel message
+          phaseComplete.classList.remove("phase-hidden");
+          completeNote.style.display = "none";
+          errorArea.style.display = "";
+          errorArea.textContent = "Upload cancelled.";
+          fileInput.disabled = false;
+          cancelButton.remove();
+          return;
         }
-        localStorage.removeItem(`uploadId_${fileName}`);
-        uploadBtn.disabled = false;
-        cancelButton.remove();
-        return;
+
+        if (retry === maxRetries - 1) {
+          statusText.textContent = "";
+          // Show phase 03 with error
+          phaseComplete.classList.remove("phase-hidden");
+          completeNote.style.display = "none";
+          errorArea.style.display = "";
+          errorArea.textContent = "Upload failed. Please try again.";
+          fileInput.disabled = false;
+          cancelButton.remove();
+          return;
+        }
+
+        statusText.textContent = `Retrying... (${retry + 1}/${maxRetries})`;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     }
   }
 
   cancelButton.remove();
   uploadBtn.disabled = false;
+  fileInput.disabled = false;
 });
