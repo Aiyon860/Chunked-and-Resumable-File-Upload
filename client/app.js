@@ -1,3 +1,39 @@
+const CONFIG = {
+  API_BASE: "http://localhost:3000",
+  CHUNK_SIZE: 1 * 1024 * 1024, // 1 MB
+  MAX_FILE_SIZE: 100 * 1024 * 1024, // 100 MB
+  MAX_RETRIES: 3,
+  RETRY_DELAY_MS: 1500,
+  ALLOWED_MIME_TYPES: [
+    "image/png",
+    "image/jpeg",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-powerpoint",
+  ],
+};
+
+// --- Formatting helpers ---
+
+function formatSpeed(bytesPerSec) {
+  if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+  return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
+}
+
+function formatETA(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+}
+
+// --- DOM refs ---
+
 let controller;
 let signal;
 
@@ -17,56 +53,54 @@ const phaseComplete = document.getElementById("phaseComplete");
 const resultArea = document.getElementById("resultArea");
 const errorArea = document.getElementById("errorArea");
 const completeNote = document.getElementById("completeNote");
+const cancelButton = document.getElementById("cancelUploadBtn");
 
 let lastChunkIndex = null;
+
+// --- UI helpers ---
+
+function showElement(el) { el.classList.remove("phase-hidden"); el.removeAttribute("hidden"); }
+function hideElement(el) { el.classList.add("phase-hidden"); el.setAttribute("hidden", ""); }
+
+function resetUI() {
+  hideElement(phaseTransfer);
+  hideElement(phaseComplete);
+  hideElement(resultArea);
+  hideElement(errorArea);
+  showElement(completeNote);
+  hideElement(cancelButton);
+  resultArea.textContent = "";
+  errorArea.textContent = "";
+  progressBar.value = 0;
+  speedUpload.textContent = "";
+  remainingTimeLabel.textContent = "";
+  chunkProgress.textContent = "";
+}
+
+// --- File selection ---
 
 const getFileMetadata = async (e) => {
   const file = e.target.files[0];
   statusText.textContent = "";
-  chunkProgress.innerHTML = "";
-
-  // Reset phases on new file selection
-  phaseTransfer.classList.add("phase-hidden");
-  phaseComplete.classList.add("phase-hidden");
-  resultArea.style.display = "none";
-  resultArea.textContent = "";
-  errorArea.style.display = "none";
-  errorArea.textContent = "";
-  completeNote.style.display = "";
-  progressBar.value = 0;
-  speedUpload.textContent = "";
-  remainingTimeLabel.textContent = "";
+  lastChunkIndex = null;
+  resetUI();
 
   if (!file) {
     statusText.textContent = "No file selected";
     return;
   }
 
-  const allowedMimeTypes = [
-    "image/png",
-    "image/jpeg", // Standar untuk .jpg dan .jpeg
-    "application/pdf", // PDF
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // DOCX
-    "application/msword", // DOC
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // XLSX
-    "application/vnd.ms-excel", // XLS
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation", // PPTX
-    "application/vnd.ms-powerpoint", // PPT
-  ];
-
-  if (!allowedMimeTypes.includes(file.type)) {
+  if (!CONFIG.ALLOWED_MIME_TYPES.includes(file.type)) {
     statusText.textContent = "Unsupported file type";
     return;
   }
 
-  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 50 MB
-  if (file.size > MAX_FILE_SIZE) {
+  if (file.size > CONFIG.MAX_FILE_SIZE) {
     statusText.textContent = "File too large";
     return;
   }
 
   const lastDotIndex = file.name.lastIndexOf(".");
-
   if (lastDotIndex <= 0) {
     statusText.textContent = "No file extension";
     return;
@@ -80,103 +114,104 @@ const getFileMetadata = async (e) => {
   const savedUploadId = localStorage.getItem(`uploadId_${file.name}`);
   if (savedUploadId) {
     try {
-      let response = await fetch(
-        `http://localhost:3000/upload/status/${savedUploadId}`,
+      const response = await fetch(
+        `${CONFIG.API_BASE}/upload/status/${savedUploadId}`,
       );
+      if (!response.ok) throw new Error("Status check failed");
       const data = await response.json();
       const currentChunks = data.received.length;
-      lastChunkIndex = currentChunks - 1;
+      lastChunkIndex = currentChunks;
       statusText.textContent = `Previous upload detected (${currentChunks} chunks received). Click Upload to resume.`;
     } catch {
-      // Server might be down or temp folder cleaned up
       localStorage.removeItem(`uploadId_${file.name}`);
       lastChunkIndex = null;
     }
   }
 };
 
-fileInput.addEventListener("click", () => {
-  fileInput.value = "";
-});
+fileInput.addEventListener("click", () => { fileInput.value = ""; });
 fileInput.addEventListener("change", getFileMetadata);
 fileInput.addEventListener("drop", getFileMetadata);
+
+// --- Cancel handler ---
+
+cancelButton.addEventListener("click", async () => {
+  if (!controller) return;
+  controller.abort();
+
+  const uploadId = cancelButton.dataset.uploadId;
+  const fileName = cancelButton.dataset.fileName;
+
+  try {
+    await fetch(`${CONFIG.API_BASE}/upload/${uploadId}`, { method: "DELETE" });
+  } catch { /* best-effort */ }
+
+  if (fileName) localStorage.removeItem(`uploadId_${fileName}`);
+  hideElement(cancelButton);
+  fileInput.disabled = false;
+});
+
+// --- Upload handler ---
 
 uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   uploadBtn.disabled = true;
   fileInput.disabled = true;
-  resultArea.style.display = "none";
+  hideElement(resultArea);
+  hideElement(errorArea);
 
-  // Fresh AbortController for each upload
   controller = new AbortController();
   signal = controller.signal;
 
-  const cancelButton = document.createElement("button");
-  cancelButton.id = "cancelUploadBtn";
-  cancelButton.textContent = "Cancel Upload";
-
-  const CHUNK_SIZE = 1 * 1024 * 1024; // 1 MB
+  const CHUNK_SIZE = CONFIG.CHUNK_SIZE;
   const file = fileInput.files[0];
   const fileName = file.name;
   const fileSize = file.size;
   const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
-  const existingUploadId = localStorage.getItem(
-    `uploadId_${fileInput.files[0].name}`,
-  );
+  const existingUploadId = localStorage.getItem(`uploadId_${fileName}`);
   let uploadId;
 
+  const startChunk = lastChunkIndex ?? 0;
   const startTime = Date.now();
   let uploadedBytes = 0;
 
   if (existingUploadId) {
-    statusText.textContent = "Resuming upload...";
     uploadId = existingUploadId;
-    progressBar.value = (lastChunkIndex / totalChunks) * 100;
+    progressBar.value = (startChunk / totalChunks) * 100;
+    statusText.textContent = "Resuming upload...";
   } else {
     uploadId = crypto.randomUUID();
     localStorage.setItem(`uploadId_${fileName}`, uploadId);
     progressBar.value = 0;
-    statusText.textContent = "Uploading...";
+    statusText.textContent = "Preparing upload...";
   }
 
-  // Show transfer phase
-  phaseTransfer.classList.remove("phase-hidden");
+  // Show transfer phase and cancel button
+  showElement(phaseTransfer);
+  cancelButton.dataset.uploadId = uploadId;
+  cancelButton.dataset.fileName = fileName;
+  showElement(cancelButton);
 
-  cancelButton.addEventListener("click", async () => {
-    const response = await fetch(`http://localhost:3000/upload/${uploadId}`, {
-      method: "DELETE",
-    });
-    if (!response.ok) {
-      return;
-    }
-
-    controller.abort();
-
-    cancelButton.remove();
-    fileInput.disabled = false;
-  });
-  uploadForm.after(cancelButton);
-
-  for (
-    let chunkIndex = lastChunkIndex ?? 0;
-    chunkIndex < totalChunks;
-    chunkIndex++
-  ) {
-    const currentTime = Date.now();
-    const elapsedTime = (currentTime - startTime) / 1000;
-
-    if (elapsedTime > 0) {
-      const speed = uploadedBytes / elapsedTime;
-      const remainingTime = ((totalChunks - chunkIndex) * CHUNK_SIZE) / speed;
-
-      speedUpload.textContent = `${(speed / 1024).toFixed(2)} KB/s`;
-      remainingTimeLabel.textContent = `${remainingTime.toFixed(2)} s`;
-    }
+  for (let chunkIndex = startChunk; chunkIndex < totalChunks; chunkIndex++) {
+    if (signal.aborted) return;
 
     const start = chunkIndex * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, fileSize);
     const chunk = file.slice(start, end);
+    const chunkSize = end - start;
+
+    // Update speed/ETA
+    const elapsedTime = (Date.now() - startTime) / 1000;
+    if (elapsedTime > 0 && uploadedBytes > 0) {
+      const speed = uploadedBytes / elapsedTime;
+      const remainingBytes = fileSize - (start + chunkSize);
+      const eta = remainingBytes / speed;
+      speedUpload.textContent = formatSpeed(speed);
+      remainingTimeLabel.textContent = formatETA(eta);
+    }
+
+    statusText.textContent = "Uploading...";
 
     const chunkBody = new FormData();
     chunkBody.append("chunk", chunk);
@@ -185,69 +220,71 @@ uploadForm.addEventListener("submit", async (e) => {
     chunkBody.append("totalChunks", totalChunks);
     chunkBody.append("fileName", fileName);
 
-    const maxRetries = 3;
+    const maxRetries = CONFIG.MAX_RETRIES;
     for (let retry = 0; retry < maxRetries; retry++) {
       try {
-        const response = await fetch("http://localhost:3000/upload/chunk", {
-          signal: signal,
+        const response = await fetch(`${CONFIG.API_BASE}/upload/chunk`, {
+          signal,
           method: "POST",
           body: chunkBody,
         });
-        if (!response.ok) continue;
 
-        const data = await response.json();
-        const uploadedFileName = data.fileName;
+        if (!response.ok) {
+          await new Promise((r) => setTimeout(r, CONFIG.RETRY_DELAY_MS));
+          continue;
+        }
 
-        uploadedBytes += CHUNK_SIZE;
-        chunkProgress.textContent = `Sending chunk ${chunkIndex + 1} of ${totalChunks}`;
+        let data;
+        try {
+          data = await response.json();
+        } catch {
+          await new Promise((r) => setTimeout(r, CONFIG.RETRY_DELAY_MS));
+          continue;
+        }
+
+        uploadedBytes += chunkSize;
+        chunkProgress.textContent = `${chunkIndex + 1} / ${totalChunks}`;
         progressBar.value = ((chunkIndex + 1) / totalChunks) * 100;
 
-        statusText.textContent =
-          data.status === "completed"
-            ? ""
-            : "Uploading...";
-
         if (data.status === "completed") {
+          statusText.textContent = "";
           localStorage.removeItem(`uploadId_${fileName}`);
-          // Show phase 03 with success
-          phaseComplete.classList.remove("phase-hidden");
-          completeNote.style.display = "none";
-          resultArea.style.display = "";
-          resultArea.textContent = `File uploaded successfully: ${uploadedFileName}`;
+          hideElement(cancelButton);
+          showElement(phaseComplete);
+          hideElement(completeNote);
+          showElement(resultArea);
+          resultArea.textContent = `File uploaded successfully: ${data.fileName}`;
         }
         break;
       } catch (error) {
         if (error.name === "AbortError") {
           statusText.textContent = "";
-          // Show phase 03 with cancel message
-          phaseComplete.classList.remove("phase-hidden");
-          completeNote.style.display = "none";
-          errorArea.style.display = "";
+          showElement(phaseComplete);
+          hideElement(completeNote);
+          showElement(errorArea);
           errorArea.textContent = "Upload cancelled.";
           fileInput.disabled = false;
-          cancelButton.remove();
+          hideElement(cancelButton);
           return;
         }
 
         if (retry === maxRetries - 1) {
           statusText.textContent = "";
-          // Show phase 03 with error
-          phaseComplete.classList.remove("phase-hidden");
-          completeNote.style.display = "none";
-          errorArea.style.display = "";
+          showElement(phaseComplete);
+          hideElement(completeNote);
+          showElement(errorArea);
           errorArea.textContent = "Upload failed. Please try again.";
           fileInput.disabled = false;
-          cancelButton.remove();
+          hideElement(cancelButton);
           return;
         }
 
         statusText.textContent = `Retrying... (${retry + 1}/${maxRetries})`;
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((r) => setTimeout(r, CONFIG.RETRY_DELAY_MS));
       }
     }
   }
 
-  cancelButton.remove();
-  uploadBtn.disabled = false;
+  hideElement(cancelButton);
   fileInput.disabled = false;
 });

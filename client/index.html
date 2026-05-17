@@ -238,6 +238,7 @@
             #uploadBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
             /* Cancel button (dynamically created by app.js) */
+            #cancelUploadBtn[hidden] { display: none; }
             #cancelUploadBtn {
                 display: inline-flex;
                 align-items: center;
@@ -395,10 +396,10 @@
                     <p id="statusText" aria-live="polite"></p>
 
                     <div class="actions">
-                        <button type="submit" id="uploadBtn">Upload</button>
+                        <button type="submit" id="uploadBtn" disabled>Upload</button>
                     </div>
                 </form>
-                <!-- cancelUploadBtn is dynamically inserted here by app.js -->
+                <button id="cancelUploadBtn" class="phase-hidden" hidden>Cancel Upload</button>
             </section>
 
             <!-- PHASE 02: TRANSFER -->
@@ -432,8 +433,8 @@
                     <span class="phase-number" aria-hidden="true">03</span>
                     <span class="phase-label">Complete</span>
                 </div>
-                <p class="result-message" id="resultArea" style="display:none" aria-live="polite"></p>
-                <p class="error-message" id="errorArea" style="display:none" aria-live="assertive"></p>
+                <p class="result-message phase-hidden" id="resultArea" aria-live="polite"></p>
+                <p class="error-message phase-hidden" id="errorArea" aria-live="assertive"></p>
                 <p class="phase-complete-note" id="completeNote">Waiting for transfer to finish.</p>
             </section>
         </main>
